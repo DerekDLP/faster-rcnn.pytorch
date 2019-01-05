@@ -25,7 +25,8 @@ from roi_data_layer.roidb import combined_roidb
 from roi_data_layer.roibatchLoader import roibatchLoader
 from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from model.rpn.bbox_transform import clip_boxes
-from model.nms.nms_wrapper import nms
+# from model.nms.nms_wrapper import nms
+from model.roi_layers import nms
 from model.rpn.bbox_transform import bbox_transform_inv
 from model.utils.net_utils import save_net, load_net, vis_detections
 from model.faster_rcnn.vgg16 import vgg16
@@ -57,7 +58,7 @@ def parse_args():
                       help='set config keys', default=None,
                       nargs=argparse.REMAINDER)
   parser.add_argument('--load_dir', dest='load_dir',
-                      help='directory to load models', default="/srv/share/jyang375/models",
+                      help='directory to load models', default="models",
                       type=str)
   parser.add_argument('--cuda', dest='cuda',
                       help='whether use CUDA',
@@ -83,9 +84,6 @@ def parse_args():
   parser.add_argument('--checkpoint', dest='checkpoint',
                       help='checkpoint to load network',
                       default=10021, type=int)
-  parser.add_argument('--bs', dest='batch_size',
-                      help='batch_size',
-                      default=1, type=int)
   parser.add_argument('--vis', dest='vis',
                       help='visualization mode',
                       action='store_true')
@@ -187,10 +185,10 @@ if __name__ == '__main__':
     gt_boxes = gt_boxes.cuda()
 
   # make variable
-  im_data = Variable(im_data, volatile=True)
-  im_info = Variable(im_info, volatile=True)
-  num_boxes = Variable(num_boxes, volatile=True)
-  gt_boxes = Variable(gt_boxes, volatile=True)
+  im_data = Variable(im_data)
+  im_info = Variable(im_info)
+  num_boxes = Variable(num_boxes)
+  gt_boxes = Variable(gt_boxes)
 
   if args.cuda:
     cfg.CUDA = True
@@ -214,9 +212,9 @@ if __name__ == '__main__':
                for _ in xrange(imdb.num_classes)]
 
   output_dir = get_output_dir(imdb, save_name)
-  dataset = roibatchLoader(roidb, ratio_list, ratio_index, args.batch_size, \
+  dataset = roibatchLoader(roidb, ratio_list, ratio_index, 1, \
                         imdb.num_classes, training=False, normalize = False)
-  dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size,
+  dataloader = torch.utils.data.DataLoader(dataset, batch_size=1,
                             shuffle=False, num_workers=0,
                             pin_memory=True)
 
@@ -252,11 +250,11 @@ if __name__ == '__main__':
             if args.class_agnostic:
                 box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-                box_deltas = box_deltas.view(args.batch_size, -1, 4)
+                box_deltas = box_deltas.view(1, -1, 4)
             else:
                 box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-                box_deltas = box_deltas.view(args.batch_size, -1, 4 * len(imdb.classes))
+                box_deltas = box_deltas.view(1, -1, 4 * len(imdb.classes))
 
           pred_boxes = bbox_transform_inv(boxes, box_deltas, 1)
           pred_boxes = clip_boxes(pred_boxes, im_info.data, 1)
@@ -264,7 +262,7 @@ if __name__ == '__main__':
           # Simply repeat the boxes, once for each class
           pred_boxes = np.tile(boxes, (1, scores.shape[1]))
 
-      pred_boxes /= data[1][0][2]
+      pred_boxes /= data[1][0][2].item()
 
       scores = scores.squeeze()
       pred_boxes = pred_boxes.squeeze()
@@ -288,7 +286,7 @@ if __name__ == '__main__':
             cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
             # cls_dets = torch.cat((cls_boxes, cls_scores), 1)
             cls_dets = cls_dets[order]
-            keep = nms(cls_dets, cfg.TEST.NMS)
+            keep = nms(cls_boxes[order, :], cls_scores[order], cfg.TEST.NMS)
             cls_dets = cls_dets[keep.view(-1).long()]
             if vis:
               im2show = vis_detections(im2show, imdb.classes[j], cls_dets.cpu().numpy(), 0.3)
